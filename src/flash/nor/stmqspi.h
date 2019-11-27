@@ -62,6 +62,7 @@
 #define QSPI_MM_MODE		0x0C000000U			/* memory mapped mode */
 #define QSPI_ALTB_MODE		0x0003C000U			/* alternate byte mode */
 #define QSPI_4LINE_MODE		0x03000F00U			/* 4 lines for data, addr, instr */
+#define QSPI_1LINE_MODE		0x01000F00U			/* 4 lines for data, addr, instr */
 #define QSPI_NO_DATA		(~0x03000000U)		/* no data */
 #define QSPI_NO_ALTB		(~QSPI_ALTB_MODE)	/* no alternate */
 #define QSPI_NO_ADDR		(~0x00000C00U)		/* no address */

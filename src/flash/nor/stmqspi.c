@@ -57,7 +57,7 @@
 
 /* saved mode settings */
 #define QSPI_MODE (stmqspi_info->saved_ccr & \
-	(0xF0000000U | QSPI_DCYC_MASK | QSPI_4LINE_MODE | QSPI_ALTB_MODE | QSPI_ADDR4))
+	(0xF0000000U | QSPI_DCYC_MASK | QSPI_1LINE_MODE | QSPI_ALTB_MODE | QSPI_ADDR4))
 
 /* saved read mode settings but indirect read instead of memory mapped
  * in particular, use the dummy cycle setting from this saved setting */
