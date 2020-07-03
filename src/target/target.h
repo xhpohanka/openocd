@@ -32,6 +32,7 @@
 #define OPENOCD_TARGET_TARGET_H
 
 #include <helper/list.h>
+#include <jim.h>
 
 struct reg;
 struct trace;
@@ -258,6 +259,8 @@ enum target_event {
 	TARGET_EVENT_RESUMED,		/* target resumed to normal execution */
 	TARGET_EVENT_RESUME_START,
 	TARGET_EVENT_RESUME_END,
+	TARGET_EVENT_STEP_START,
+	TARGET_EVENT_STEP_END,
 
 	TARGET_EVENT_GDB_START, /* debugger started execution (step/run) */
 	TARGET_EVENT_GDB_END, /* debugger stopped execution (step/run) */
@@ -275,6 +278,7 @@ enum target_event {
 	TARGET_EVENT_DEBUG_RESUMED, /* target resumed to execute on behalf of the debugger */
 
 	TARGET_EVENT_EXAMINE_START,
+	TARGET_EVENT_EXAMINE_FAIL,
 	TARGET_EVENT_EXAMINE_END,
 
 	TARGET_EVENT_GDB_ATTACH,
@@ -290,8 +294,8 @@ enum target_event {
 
 struct target_event_action {
 	enum target_event event;
-	struct Jim_Interp *interp;
-	struct Jim_Obj *body;
+	Jim_Interp *interp;
+	Jim_Obj *body;
 	struct target_event_action *next;
 };
 
@@ -572,6 +576,18 @@ int target_run_flash_async_algorithm(struct target *target,
 		void *arch_info);
 
 /**
+ * This routine is a wrapper for asynchronous algorithms.
+ *
+ */
+int target_run_read_async_algorithm(struct target *target,
+		uint8_t *buffer, uint32_t count, int block_size,
+		int num_mem_params, struct mem_param *mem_params,
+		int num_reg_params, struct reg_param *reg_params,
+		uint32_t buffer_start, uint32_t buffer_size,
+		uint32_t entry_point, uint32_t exit_point,
+		void *arch_info);
+
+/**
  * Read @a count items of @a size bytes from the memory of @a target at
  * the @a address given.
  *
@@ -756,6 +772,7 @@ void target_handle_md_output(struct command_invocation *cmd,
 #define ERROR_TARGET_NOT_RUNNING (-310)
 #define ERROR_TARGET_NOT_EXAMINED (-311)
 #define ERROR_TARGET_DUPLICATE_BREAKPOINT (-312)
+#define ERROR_TARGET_ALGO_EXIT  (-313)
 
 extern bool get_target_reset_nag(void);
 

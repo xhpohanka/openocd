@@ -136,7 +136,8 @@ struct fespi_target {
 /* TODO !!! What is the right naming convention here? */
 static const struct fespi_target target_devices[] = {
 	/* name,   tap_idcode, ctrl_base */
-	{ "Freedom E300 SPI Flash",  0x10e31913 , 0x10014000 },
+	{ "Freedom E310-G000 SPI Flash",  0x10e31913 , 0x10014000 },
+	{ "Freedom E310-G002 SPI Flash",  0x20000913 , 0x10014000 },
 	{ NULL,    0,           0          }
 };
 
@@ -182,7 +183,7 @@ static int fespi_read_reg(struct flash_bank *bank, uint32_t *value, target_addr_
 }
 
 static int fespi_write_reg(struct flash_bank *bank, target_addr_t address, uint32_t value)
-{								\
+{
 	struct target *target = bank->target;
 	struct fespi_flash_bank *fespi_info = bank->driver_priv;
 

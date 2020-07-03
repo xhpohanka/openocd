@@ -1703,6 +1703,7 @@ static int cortex_a_assert_reset(struct target *target)
 
 static int cortex_a_deassert_reset(struct target *target)
 {
+	struct armv7a_common *armv7a = target_to_armv7a(target);
 	int retval;
 
 	LOG_DEBUG(" ");
@@ -1721,7 +1722,8 @@ static int cortex_a_deassert_reset(struct target *target)
 			LOG_WARNING("%s: ran after reset and before halt ...",
 				target_name(target));
 			if (target_was_examined(target)) {
-				retval = target_halt(target);
+				retval = mem_ap_write_atomic_u32(armv7a->debug_ap,
+						armv7a->debug_base + CPUDBG_DRCR, DRCR_HALT);
 				if (retval != ERROR_OK)
 					return retval;
 			} else
@@ -2678,7 +2680,7 @@ static int cortex_a_examine_first(struct target *target)
 
 	int i;
 	int retval = ERROR_OK;
-	uint32_t didr, cpuid, dbg_osreg;
+	uint32_t didr, cpuid, dbg_osreg, dbg_idpfr1;
 
 	/* Search for the APB-AP - it is needed for access to debug registers */
 	retval = dap_find_ap(swjdp, AP_TYPE_APB_AP, &armv7a->debug_ap);
@@ -2717,6 +2719,10 @@ static int cortex_a_examine_first(struct target *target)
 			  target->coreid, armv7a->debug_base);
 	} else
 		armv7a->debug_base = target->dbgbase;
+
+	if ((armv7a->debug_base & (1UL<<31)) == 0)
+		LOG_WARNING("Debug base address for target %s has bit 31 set to 0. Access to debug registers will likely fail!\n"
+			    "Please fix the target configuration.", target_name(target));
 
 	retval = mem_ap_read_atomic_u32(armv7a->debug_ap,
 			armv7a->debug_base + CPUDBG_DIDR, &didr);
@@ -2783,7 +2789,25 @@ static int cortex_a_examine_first(struct target *target)
 		}
 	}
 
-	armv7a->arm.core_type = ARM_MODE_MON;
+	retval = mem_ap_read_atomic_u32(armv7a->debug_ap,
+				 armv7a->debug_base + CPUDBG_ID_PFR1, &dbg_idpfr1);
+	if (retval != ERROR_OK)
+		return retval;
+
+	if (dbg_idpfr1 & 0x000000f0) {
+		LOG_DEBUG("target->coreid %" PRId32 " has security extensions",
+				target->coreid);
+		armv7a->arm.core_type = ARM_CORE_TYPE_SEC_EXT;
+	}
+	if (dbg_idpfr1 & 0x0000f000) {
+		LOG_DEBUG("target->coreid %" PRId32 " has virtualization extensions",
+				target->coreid);
+		/*
+		 * overwrite and simplify the checks.
+		 * virtualization extensions require implementation of security extension
+		 */
+		armv7a->arm.core_type = ARM_CORE_TYPE_VIRT_EXT;
+	}
 
 	/* Avoid recreating the registers cache */
 	if (!target_was_examined(target)) {
@@ -2935,6 +2959,7 @@ static void cortex_a_deinit_target(struct target *target)
 	}
 
 	free(cortex_a->brp_list);
+	arm_free_reg_cache(dpm->arm);
 	free(dpm->dbp);
 	free(dpm->dwp);
 	free(target->private_config);

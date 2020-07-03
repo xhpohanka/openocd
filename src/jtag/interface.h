@@ -26,6 +26,7 @@
 #define OPENOCD_JTAG_INTERFACE_H
 
 #include <jtag/jtag.h>
+#include <jtag/swim.h>
 #include <target/armv7m_trace.h>
 
 /* @file
@@ -250,6 +251,8 @@ struct adapter_driver {
 
 	/**
 	 * Control (assert/deassert) the signals SRST and TRST on the interface.
+	 * This function is synchronous and should be called after the adapter
+	 * queue has been properly flushed.
 	 * This function is optional.
 	 * Adapters that don't support resets can either not define this function
 	 * or return an error code.
@@ -357,6 +360,9 @@ struct adapter_driver {
 
 	/* DAP APIs over SWD transport */
 	const struct dap_ops *dap_swd_ops;
+
+	/* SWIM APIs */
+	const struct swim_driver *swim_ops;
 };
 
 extern const char * const jtag_only[];

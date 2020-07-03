@@ -24,18 +24,14 @@ noinst_LTLIBRARIES += %D%/libtarget.la
 	$(STM8_SRC) \
 	$(INTEL_IA32_SRC) \
 	$(ESIRISC_SRC) \
-	$(ARC32_SRC) \
-	$(PULPINO_SRC) \
+        $(ARC_SRC) \
 	%D%/avrt.c \
 	%D%/dsp563xx.c \
 	%D%/dsp563xx_once.c \
 	%D%/dsp5680xx.c \
-	%D%/hla_target.c
-
-if TARGET64
-%C%_libtarget_la_SOURCES +=$(ARMV8_SRC)
-%C%_libtarget_la_SOURCES +=$(MIPS64_SRC)
-endif
+	%D%/hla_target.c \
+	$(ARMV8_SRC) \
+	$(MIPS64_SRC)
 
 TARGET_CORE_SRC = \
 	%D%/algorithm.c \
@@ -158,14 +154,11 @@ ESIRISC_SRC = \
 	%D%/esirisc_jtag.c \
 	%D%/esirisc_trace.c
 
-ARC32_SRC = \
-	%D%/arc32.c \
-	%D%/arc_dbg.c \
-	%D%/arc_jtag.c \
-	%D%/arc_mem.c \
-	%D%/arc_mntr.c \
-	%D%/arc_ocd.c \
-	%D%/arc_regs.c
+ARC_SRC = \
+        %D%/arc.c \
+        %D%/arc_cmd.c \
+        %D%/arc_jtag.c \
+        %D%/arc_mem.c
 
 %C%_libtarget_la_SOURCES += \
 	%D%/algorithm.h \
@@ -254,7 +247,11 @@ ARC32_SRC = \
 	%D%/esirisc.h \
 	%D%/esirisc_jtag.h \
 	%D%/esirisc_regs.h \
-	%D%/esirisc_trace.h
+	%D%/esirisc_trace.h \
+	%D%/arc.h \
+	%D%/arc_cmd.h \
+	%D%/arc_jtag.h \
+	%D%/arc_mem.h
 
 PULPINO_SRC = \
 	%D%/rv32m1/rv32m1_tap_mohor.c \

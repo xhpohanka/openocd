@@ -100,9 +100,6 @@ extern struct target_type dsp563xx_target;
 extern struct target_type dsp5680xx_target;
 extern struct target_type testee_target;
 extern struct target_type avr32_ap7k_target;
-extern struct target_type arc600_target;
-extern struct target_type arc700_target;
-extern struct target_type arcv2_target;
 extern struct target_type hla_target;
 extern struct target_type nds32_v2_target;
 extern struct target_type nds32_v3_target;
@@ -114,7 +111,7 @@ extern struct target_type stm8_target;
 extern struct target_type riscv_target;
 extern struct target_type mem_ap_target;
 extern struct target_type esirisc_target;
-extern struct target_type rv32m1_target;
+extern struct target_type arcv2_target;
 
 static struct target_type *target_types[] = {
 	&arm7tdmi_target,
@@ -139,9 +136,6 @@ static struct target_type *target_types[] = {
 	&dsp5680xx_target,
 	&testee_target,
 	&avr32_ap7k_target,
-	&arc600_target,
-	&arc700_target,
-	&arcv2_target,
 	&hla_target,
 	&nds32_v2_target,
 	&nds32_v3_target,
@@ -153,11 +147,9 @@ static struct target_type *target_types[] = {
 	&riscv_target,
 	&mem_ap_target,
 	&esirisc_target,
-#if BUILD_TARGET64
+	&arcv2_target,
 	&aarch64_target,
 	&mips_mips64_target,
-#endif
-	&rv32m1_target,
 	NULL,
 };
 
@@ -211,6 +203,8 @@ static const Jim_Nvp nvp_target_event[] = {
 	{ .value = TARGET_EVENT_RESUMED, .name = "resumed" },
 	{ .value = TARGET_EVENT_RESUME_START, .name = "resume-start" },
 	{ .value = TARGET_EVENT_RESUME_END, .name = "resume-end" },
+	{ .value = TARGET_EVENT_STEP_START, .name = "step-start" },
+	{ .value = TARGET_EVENT_STEP_END, .name = "step-end" },
 
 	{ .name = "gdb-start", .value = TARGET_EVENT_GDB_START },
 	{ .name = "gdb-end", .value = TARGET_EVENT_GDB_END },
@@ -225,6 +219,7 @@ static const Jim_Nvp nvp_target_event[] = {
 	{ .value = TARGET_EVENT_RESET_END,           .name = "reset-end" },
 
 	{ .value = TARGET_EVENT_EXAMINE_START, .name = "examine-start" },
+	{ .value = TARGET_EVENT_EXAMINE_FAIL, .name = "examine-fail" },
 	{ .value = TARGET_EVENT_EXAMINE_END, .name = "examine-end" },
 
 	{ .value = TARGET_EVENT_DEBUG_HALTED, .name = "debug-halted" },
@@ -714,13 +709,17 @@ static int default_check_reset(struct target *target)
 	return ERROR_OK;
 }
 
+/* Equvivalent Tcl code arp_examine_one is in src/target/startup.tcl
+ * Keep in sync */
 int target_examine_one(struct target *target)
 {
 	target_call_event_callbacks(target, TARGET_EVENT_EXAMINE_START);
 
 	int retval = target->type->examine(target);
-	if (retval != ERROR_OK)
+	if (retval != ERROR_OK) {
+		target_call_event_callbacks(target, TARGET_EVENT_EXAMINE_FAIL);
 		return retval;
+	}
 
 	target_call_event_callbacks(target, TARGET_EVENT_EXAMINE_END);
 
@@ -1023,11 +1022,11 @@ int target_run_flash_async_algorithm(struct target *target,
 			 * programming. The exact delay shouldn't matter as long as it's
 			 * less than buffer size / flash speed. This is very unlikely to
 			 * run when using high latency connections such as USB. */
-			alive_sleep(10);
+			alive_sleep(2);
 
 			/* to stop an infinite loop on some targets check and increment a timeout
 			 * this issue was observed on a stellaris using the new ICDI interface */
-			if (timeout++ >= 500) {
+			if (timeout++ >= 2500) {
 				LOG_ERROR("timeout waiting for algorithm, a target reset is recommended");
 				return ERROR_FLASH_OPERATION_FAILED;
 			}
@@ -1040,6 +1039,10 @@ int target_run_flash_async_algorithm(struct target *target,
 		/* Limit to the amount of data we actually want to write */
 		if (thisrun_bytes > count * block_size)
 			thisrun_bytes = count * block_size;
+
+		/* Force end of large blocks to be word aligned */
+		if (thisrun_bytes >= 16)
+			thisrun_bytes -= (rp + thisrun_bytes) & 0x03;
 
 		/* Write data to fifo */
 		retval = target_write_buffer(target, wp, thisrun_bytes, buffer);
@@ -1083,6 +1086,156 @@ int target_run_flash_async_algorithm(struct target *target,
 		retval = target_read_u32(target, rp_addr, &rp);
 		if (retval == ERROR_OK && rp == 0) {
 			LOG_ERROR("flash write algorithm aborted by target");
+			retval = ERROR_FLASH_OPERATION_FAILED;
+		}
+	}
+
+	return retval;
+}
+
+int target_run_read_async_algorithm(struct target *target,
+		uint8_t *buffer, uint32_t count, int block_size,
+		int num_mem_params, struct mem_param *mem_params,
+		int num_reg_params, struct reg_param *reg_params,
+		uint32_t buffer_start, uint32_t buffer_size,
+		uint32_t entry_point, uint32_t exit_point, void *arch_info)
+{
+	int retval;
+	int timeout = 0;
+
+	const uint8_t *buffer_orig = buffer;
+
+	/* Set up working area. First word is write pointer, second word is read pointer,
+	 * rest is fifo data area. */
+	uint32_t wp_addr = buffer_start;
+	uint32_t rp_addr = buffer_start + 4;
+	uint32_t fifo_start_addr = buffer_start + 8;
+	uint32_t fifo_end_addr = buffer_start + buffer_size;
+
+	uint32_t wp = fifo_start_addr;
+	uint32_t rp = fifo_start_addr;
+
+	/* validate block_size is 2^n */
+	assert(!block_size || !(block_size & (block_size - 1)));
+
+	retval = target_write_u32(target, wp_addr, wp);
+	if (retval != ERROR_OK)
+		return retval;
+	retval = target_write_u32(target, rp_addr, rp);
+	if (retval != ERROR_OK)
+		return retval;
+
+	/* Start up algorithm on target */
+	retval = target_start_algorithm(target, num_mem_params, mem_params,
+			num_reg_params, reg_params,
+			entry_point,
+			exit_point,
+			arch_info);
+
+	if (retval != ERROR_OK) {
+		LOG_ERROR("error starting target flash read algorithm");
+		return retval;
+	}
+
+	while (count > 0) {
+		retval = target_read_u32(target, wp_addr, &wp);
+		if (retval != ERROR_OK) {
+			LOG_ERROR("failed to get write pointer");
+			break;
+		}
+
+		LOG_DEBUG("offs 0x%zx count 0x%" PRIx32 " wp 0x%" PRIx32 " rp 0x%" PRIx32,
+			(size_t) (buffer - buffer_orig), count, wp, rp);
+
+		if (wp == 0) {
+			LOG_ERROR("flash read algorithm aborted by target");
+			retval = ERROR_FLASH_OPERATION_FAILED;
+			break;
+		}
+
+		if (((wp - fifo_start_addr) & (block_size - 1)) || wp < fifo_start_addr || wp >= fifo_end_addr) {
+			LOG_ERROR("corrupted fifo write pointer 0x%" PRIx32, wp);
+			break;
+		}
+
+		/* Count the number of bytes available in the fifo without
+		 * crossing the wrap around. */
+		uint32_t thisrun_bytes;
+		if (wp >= rp)
+			thisrun_bytes = wp - rp;
+		else
+			thisrun_bytes = fifo_end_addr - rp;
+
+		if (thisrun_bytes == 0) {
+			/* Throttle polling a bit if transfer is (much) faster than flash
+			 * reading. The exact delay shouldn't matter as long as it's
+			 * less than buffer size / flash speed. This is very unlikely to
+			 * run when using high latency connections such as USB. */
+			alive_sleep(2);
+
+			/* to stop an infinite loop on some targets check and increment a timeout
+			 * this issue was observed on a stellaris using the new ICDI interface */
+			if (timeout++ >= 2500) {
+				LOG_ERROR("timeout waiting for algorithm, a target reset is recommended");
+				return ERROR_FLASH_OPERATION_FAILED;
+			}
+			continue;
+		}
+
+		/* Reset our timeout */
+		timeout = 0;
+
+		/* Limit to the amount of data we actually want to read */
+		if (thisrun_bytes > count * block_size)
+			thisrun_bytes = count * block_size;
+
+		/* Force end of large blocks to be word aligned */
+		if (thisrun_bytes >= 16)
+			thisrun_bytes -= (rp + thisrun_bytes) & 0x03;
+
+		/* Read data from fifo */
+		retval = target_read_buffer(target, rp, thisrun_bytes, buffer);
+		if (retval != ERROR_OK)
+			break;
+
+		/* Update counters and wrap write pointer */
+		buffer += thisrun_bytes;
+		count -= thisrun_bytes / block_size;
+		rp += thisrun_bytes;
+		if (rp >= fifo_end_addr)
+			rp = fifo_start_addr;
+
+		/* Store updated write pointer to target */
+		retval = target_write_u32(target, rp_addr, rp);
+		if (retval != ERROR_OK)
+			break;
+
+		/* Avoid GDB timeouts */
+		keep_alive();
+
+	}
+
+	if (retval != ERROR_OK) {
+		/* abort flash write algorithm on target */
+		target_write_u32(target, rp_addr, 0);
+	}
+
+	int retval2 = target_wait_algorithm(target, num_mem_params, mem_params,
+			num_reg_params, reg_params,
+			exit_point,
+			10000,
+			arch_info);
+
+	if (retval2 != ERROR_OK) {
+		LOG_ERROR("error waiting for target flash write algorithm");
+		retval = retval2;
+	}
+
+	if (retval == ERROR_OK) {
+		/* check if algorithm set wp = 0 after fifo writer loop finished */
+		retval = target_read_u32(target, wp_addr, &wp);
+		if (retval == ERROR_OK && wp == 0) {
+			LOG_ERROR("flash read algorithm aborted by target");
 			retval = ERROR_FLASH_OPERATION_FAILED;
 		}
 	}
@@ -1257,7 +1410,17 @@ bool target_supports_gdb_connection(struct target *target)
 int target_step(struct target *target,
 		int current, target_addr_t address, int handle_breakpoints)
 {
-	return target->type->step(target, current, address, handle_breakpoints);
+	int retval;
+
+	target_call_event_callbacks(target, TARGET_EVENT_STEP_START);
+
+	retval = target->type->step(target, current, address, handle_breakpoints);
+	if (retval != ERROR_OK)
+		return retval;
+
+	target_call_event_callbacks(target, TARGET_EVENT_STEP_END);
+
+	return retval;
 }
 
 int target_get_gdb_fileio_info(struct target *target, struct gdb_fileio_info *fileio_info)
@@ -2050,6 +2213,8 @@ static void target_destroy(struct target *target)
 		target->smp = 0;
 	}
 
+	rtos_destroy(target);
+
 	free(target->gdb_port_override);
 	free(target->type);
 	free(target->trace_info);
@@ -2289,7 +2454,7 @@ static int target_read_buffer_default(struct target *target, target_addr_t addre
 	return ERROR_OK;
 }
 
-int target_checksum_memory(struct target *target, target_addr_t address, uint32_t size, uint32_t* crc)
+int target_checksum_memory(struct target *target, target_addr_t address, uint32_t size, uint32_t *crc)
 {
 	uint8_t *buffer;
 	int retval;
@@ -3144,7 +3309,7 @@ COMMAND_HANDLER(handle_step_command)
 
 	struct target *target = get_current_target(CMD_CTX);
 
-	return target->type->step(target, current_pc, addr, 1);
+	return target_step(target, current_pc, addr, 1);
 }
 
 void target_handle_md_output(struct command_invocation *cmd,
@@ -3828,11 +3993,16 @@ COMMAND_HANDLER(handle_rbp_command)
 	if (CMD_ARGC != 1)
 		return ERROR_COMMAND_SYNTAX_ERROR;
 
-	target_addr_t addr;
-	COMMAND_PARSE_ADDRESS(CMD_ARGV[0], addr);
-
 	struct target *target = get_current_target(CMD_CTX);
-	breakpoint_remove(target, addr);
+
+	if (!strcmp(CMD_ARGV[0], "all")) {
+		breakpoint_remove_all(target);
+	} else {
+		target_addr_t addr;
+		COMMAND_PARSE_ADDRESS(CMD_ARGV[0], addr);
+
+		breakpoint_remove(target, addr);
+	}
 
 	return ERROR_OK;
 }
@@ -4566,7 +4736,13 @@ void target_handle_event(struct target *target, enum target_event e)
 			struct command_context *cmd_ctx = current_command_context(teap->interp);
 			struct target *saved_target_override = cmd_ctx->current_target_override;
 			cmd_ctx->current_target_override = target;
+
 			retval = Jim_EvalObj(teap->interp, teap->body);
+
+			cmd_ctx->current_target_override = saved_target_override;
+
+			if (retval == ERROR_COMMAND_CLOSE_CONNECTION)
+				return;
 
 			if (retval == JIM_RETURN)
 				retval = teap->interp->returnCode;
@@ -4580,8 +4756,6 @@ void target_handle_event(struct target *target, enum target_event e)
 				/* clean both error code and stacktrace before return */
 				Jim_Eval(teap->interp, "error \"\" \"\"");
 			}
-
-			cmd_ctx->current_target_override = saved_target_override;
 		}
 	}
 }
@@ -4995,7 +5169,7 @@ static int jim_target_examine(Jim_Interp *interp, int argc, Jim_Obj *const *argv
 	if (goi.argc > 0 &&
 	    strcmp(Jim_GetString(argv[1], NULL), "allow-defer") == 0) {
 		/* consume it */
-		struct Jim_Obj *obj;
+		Jim_Obj *obj;
 		int e = Jim_GetOpt_Obj(&goi, &obj);
 		if (e != JIM_OK)
 			return e;
@@ -5165,7 +5339,6 @@ static int jim_target_wait_state(Jim_Interp *interp, int argc, Jim_Obj *const *a
 				"target: %s wait %s fails (%#s) %s",
 				target_name(target), n->name,
 				eObj, target_strerror_safe(e));
-		Jim_FreeNewObj(interp, eObj);
 		return JIM_ERR;
 	}
 	return JIM_OK;
@@ -6217,7 +6390,7 @@ static const struct command_registration target_exec_command_handlers[] = {
 		.name = "halt",
 		.handler = handle_halt_command,
 		.mode = COMMAND_EXEC,
-		.help = "request target to halt, then wait up to the specified"
+		.help = "request target to halt, then wait up to the specified "
 			"number of milliseconds (default 5000) for it to complete",
 		.usage = "[milliseconds]",
 	},
@@ -6233,7 +6406,7 @@ static const struct command_registration target_exec_command_handlers[] = {
 		.handler = handle_reset_command,
 		.mode = COMMAND_EXEC,
 		.usage = "[run|halt|init]",
-		.help = "Reset all targets into the specified mode."
+		.help = "Reset all targets into the specified mode. "
 			"Default reset mode is run, if not given.",
 	},
 	{
@@ -6318,7 +6491,7 @@ static const struct command_registration target_exec_command_handlers[] = {
 		.handler = handle_rbp_command,
 		.mode = COMMAND_EXEC,
 		.help = "remove breakpoint",
-		.usage = "address",
+		.usage = "'all' | address",
 	},
 	{
 		.name = "wp",

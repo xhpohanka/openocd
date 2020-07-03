@@ -43,7 +43,7 @@
 #include <jtag/swd.h>
 #include <jtag/commands.h>
 
-#include "libusb_common.h"
+#include "libusb_helper.h"
 
 #define VID 0x04b4
 #define PID 0xf139
@@ -95,7 +95,7 @@
 
 struct kitprog {
 	hid_device *hid_handle;
-	struct jtag_libusb_device_handle *usb_handle;
+	struct libusb_device_handle *usb_handle;
 	uint16_t packet_size;
 	uint16_t packet_index;
 	uint8_t *packet_buffer;
@@ -280,7 +280,7 @@ static int kitprog_usb_open(void)
 	const uint16_t pids[] = { PID, 0 };
 
 	if (jtag_libusb_open(vids, pids, kitprog_serial,
-			&kitprog_handle->usb_handle) != ERROR_OK) {
+			&kitprog_handle->usb_handle, NULL) != ERROR_OK) {
 		LOG_ERROR("Failed to open or find the device");
 		return ERROR_FAIL;
 	}
@@ -311,7 +311,7 @@ static int kitprog_usb_open(void)
 	}
 
 	/* Claim the KitProg Programmer (bulk transfer) interface */
-	if (jtag_libusb_claim_interface(kitprog_handle->usb_handle, 1) != ERROR_OK) {
+	if (libusb_claim_interface(kitprog_handle->usb_handle, 1) != ERROR_OK) {
 		LOG_ERROR("Failed to claim KitProg Programmer (bulk transfer) interface");
 		return ERROR_FAIL;
 	}
@@ -358,7 +358,7 @@ static int kitprog_get_version(void)
 	unsigned char command[3] = {HID_TYPE_START | HID_TYPE_WRITE, 0x00, HID_COMMAND_VERSION};
 	unsigned char data[64];
 
-	ret = kitprog_hid_command(command, sizeof command, data, sizeof data);
+	ret = kitprog_hid_command(command, sizeof(command), data, sizeof(data));
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -376,7 +376,7 @@ static int kitprog_get_millivolts(void)
 	unsigned char command[3] = {HID_TYPE_START | HID_TYPE_READ, 0x00, HID_COMMAND_POWER};
 	unsigned char data[64];
 
-	ret = kitprog_hid_command(command, sizeof command, data, sizeof data);
+	ret = kitprog_hid_command(command, sizeof(command), data, sizeof(data));
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -603,7 +603,7 @@ static int kitprog_generic_acquire(void)
 	 * will take the Cortex-M3 out of reset and enable debugging.
 	 */
 	for (int i = 0; i < 2; i++) {
-		for (uint8_t j = 0; j < sizeof devices && acquire_count == i; j++) {
+		for (uint8_t j = 0; j < sizeof(devices) && acquire_count == i; j++) {
 			retval = kitprog_acquire_psoc(devices[j], ACQUIRE_MODE_RESET, 3);
 			if (retval != ERROR_OK) {
 				LOG_DEBUG("Aquisition function failed for device 0x%02x.", devices[j]);

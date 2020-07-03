@@ -1,19 +1,8 @@
-#  Copyright (C) 2015 Synopsys, Inc.
+#  Copyright (C) 2015, 2020 Synopsys, Inc.
+#  Anton Kolesov <anton.kolesov@synopsys.com>
+#  Didin Evgeniy <didin@synopsys.com>
 #
-#  This program is free software; you can redistribute it and/or modify
-#  it under the terms of the GNU General Public License as published by
-#  the Free Software Foundation; either version 2 of the License, or
-#  (at your option) any later version.
-#
-#  This program is distributed in the hope that it will be useful,
-#  but WITHOUT ANY WARRANTY; without even the implied warranty of
-#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-#  GNU General Public License for more details.
-#
-#  You should have received a copy of the GNU General Public License
-#  along with this program; if not, write to the
-#  Free Software Foundation, Inc.,
-#  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+# SPDX-License-Identifier: GPL-2.0-or-later
 
 source [find cpu/arc/v2.tcl]
 
@@ -36,8 +25,8 @@ proc arc_em_reset { {target ""} } {
 
 	# Set DEBUG.ED bit to enable clock in actionpoint module.
 	# This is specific to ARC EM.
-	set debug [arc jtag aux-reg 5]
+	set debug [arc jtag get-aux-reg 5]
 	if { !($debug & (1 << 20)) } {
-		arc jtag aux-reg 5 [expr $debug | (1 << 20)]
+		arc jtag set-aux-reg 5 [expr $debug | (1 << 20)]
 	}
 }

@@ -109,7 +109,7 @@ COMMAND_HANDLER(handle_flash_info_command)
 				return retval;
 		}
 		if (retval == ERROR_FLASH_OPER_UNSUPPORTED)
-			LOG_WARNING("Flash protection check is not implemented.");
+			LOG_INFO("Flash protection check is not implemented.");
 
 		command_print(CMD,
 			"#%d : %s at " TARGET_ADDR_FMT ", size 0x%8.8" PRIx32
@@ -456,7 +456,8 @@ COMMAND_HANDLER(handle_flash_write_image_command)
 	if (retval != ERROR_OK)
 		return retval;
 
-	retval = flash_write_unlock(target, &image, &written, auto_erase, auto_unlock);
+	retval = flash_write_unlock_verify(target, &image, &written, auto_erase,
+		auto_unlock, true, false);
 	if (retval != ERROR_OK) {
 		image_close(&image);
 		return retval;
@@ -473,10 +474,62 @@ COMMAND_HANDLER(handle_flash_write_image_command)
 	return retval;
 }
 
+COMMAND_HANDLER(handle_flash_verify_image_command)
+{
+	struct target *target = get_current_target(CMD_CTX);
+
+	struct image image;
+	uint32_t verified;
+
+	int retval;
+
+	if (CMD_ARGC < 1)
+		return ERROR_COMMAND_SYNTAX_ERROR;
+
+	if (!target) {
+		LOG_ERROR("no target selected");
+		return ERROR_FAIL;
+	}
+
+	struct duration bench;
+	duration_start(&bench);
+
+	if (CMD_ARGC >= 2) {
+		image.base_address_set = 1;
+		COMMAND_PARSE_NUMBER(llong, CMD_ARGV[1], image.base_address);
+	} else {
+		image.base_address_set = 0;
+		image.base_address = 0x0;
+	}
+
+	image.start_address_set = 0;
+
+	retval = image_open(&image, CMD_ARGV[0], (CMD_ARGC == 3) ? CMD_ARGV[2] : NULL);
+	if (retval != ERROR_OK)
+		return retval;
+
+	retval = flash_write_unlock_verify(target, &image, &verified, false,
+		false, false, true);
+	if (retval != ERROR_OK) {
+		image_close(&image);
+		return retval;
+	}
+
+	if ((ERROR_OK == retval) && (duration_measure(&bench) == ERROR_OK)) {
+		command_print(CMD, "verified %" PRIu32 " bytes from file %s "
+			"in %fs (%0.3f KiB/s)", verified, CMD_ARGV[0],
+			duration_elapsed(&bench), duration_kbps(&bench, verified));
+	}
+
+	image_close(&image);
+
+	return retval;
+}
+
 COMMAND_HANDLER(handle_flash_fill_command)
 {
 	target_addr_t address;
-	uint32_t pattern;
+	uint64_t pattern;
 	uint32_t count;
 	struct target *target = get_current_target(CMD_CTX);
 	unsigned i;
@@ -487,7 +540,7 @@ COMMAND_HANDLER(handle_flash_fill_command)
 		return ERROR_COMMAND_SYNTAX_ERROR;
 
 	COMMAND_PARSE_ADDRESS(CMD_ARGV[0], address);
-	COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], pattern);
+	COMMAND_PARSE_NUMBER(u64, CMD_ARGV[1], pattern);
 	COMMAND_PARSE_NUMBER(u32, CMD_ARGV[2], count);
 
 	struct flash_bank *bank;
@@ -496,6 +549,9 @@ COMMAND_HANDLER(handle_flash_fill_command)
 		return retval;
 
 	switch (CMD_NAME[4]) {
+		case 'd':
+			wordsize = 8;
+			break;
 		case 'w':
 			wordsize = 4;
 			break;
@@ -507,6 +563,11 @@ COMMAND_HANDLER(handle_flash_fill_command)
 			break;
 		default:
 			return ERROR_COMMAND_SYNTAX_ERROR;
+	}
+
+	if ((wordsize < sizeof(pattern)) && (pattern >> (8 * wordsize) != 0)) {
+		command_print(CMD, "Fill pattern 0x%" PRIx64 " does not fit within %" PRIu32 "-byte word", pattern, wordsize);
+		return ERROR_FAIL;
 	}
 
 	if (count == 0)
@@ -541,6 +602,10 @@ COMMAND_HANDLER(handle_flash_fill_command)
 	uint8_t *ptr = buffer + padding_at_start;
 
 	switch (wordsize) {
+		case 8:
+			for (i = 0; i < count; i++, ptr += wordsize)
+				target_buffer_set_u64(target, ptr, pattern);
+			break;
 		case 4:
 			for (i = 0; i < count; i++, ptr += wordsize)
 				target_buffer_set_u32(target, ptr, pattern);
@@ -577,9 +642,12 @@ COMMAND_HANDLER(handle_flash_fill_command)
 		goto done;
 
 	for (i = 0, ptr = buffer; i < count; i++) {
-		uint32_t readback = 0;
+		uint64_t readback = 0;
 
 		switch (wordsize) {
+			case 8:
+				readback = target_buffer_get_u64(target, ptr);
+				break;
 			case 4:
 				readback = target_buffer_get_u32(target, ptr);
 				break;
@@ -593,7 +661,7 @@ COMMAND_HANDLER(handle_flash_fill_command)
 		if (readback != pattern) {
 			LOG_ERROR(
 				"Verification error address " TARGET_ADDR_FMT
-				", read back 0x%02" PRIx32 ", expected 0x%02" PRIx32,
+				", read back 0x%02" PRIx64 ", expected 0x%02" PRIx64,
 				address + i * wordsize, readback, pattern);
 			retval = ERROR_FAIL;
 			goto done;
@@ -612,6 +680,67 @@ done:
 
 	return retval;
 }
+
+COMMAND_HANDLER(handle_flash_md_command)
+{
+	int retval;
+
+	if (CMD_ARGC < 1 || CMD_ARGC > 2)
+		return ERROR_COMMAND_SYNTAX_ERROR;
+
+	target_addr_t address;
+	COMMAND_PARSE_ADDRESS(CMD_ARGV[0], address);
+
+	uint32_t count = 1;
+	if (CMD_ARGC == 2)
+		COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], count);
+
+	unsigned int wordsize;
+	switch (CMD_NAME[2]) {
+		case 'w':
+			wordsize = 4;
+			break;
+		case 'h':
+			wordsize = 2;
+			break;
+		case 'b':
+			wordsize = 1;
+			break;
+		default:
+			return ERROR_COMMAND_SYNTAX_ERROR;
+	}
+
+	if (count == 0)
+		return ERROR_OK;
+
+	struct target *target = get_current_target(CMD_CTX);
+	struct flash_bank *bank;
+	retval = get_flash_bank_by_addr(target, address, true, &bank);
+	if (retval != ERROR_OK)
+		return retval;
+
+	uint32_t offset = address - bank->base;
+	uint32_t sizebytes = count * wordsize;
+	if (offset + sizebytes > bank->size) {
+		command_print(CMD, "Cannot cross flash bank borders");
+		return ERROR_FAIL;
+	}
+
+	uint8_t *buffer = calloc(count, wordsize);
+	if (buffer == NULL) {
+		command_print(CMD, "No memory for flash read buffer");
+		return ERROR_FAIL;
+	}
+
+	retval = flash_driver_read(bank, buffer, offset, sizebytes);
+	if (retval == ERROR_OK)
+		target_handle_md_output(CMD, target, address, wordsize, count, buffer);
+
+	free(buffer);
+
+	return retval;
+}
+
 
 COMMAND_HANDLER(handle_flash_write_bank_command)
 {
@@ -952,7 +1081,7 @@ COMMAND_HANDLER(handle_flash_padded_value_command)
 
 	COMMAND_PARSE_NUMBER(u8, CMD_ARGV[1], p->default_padded_value);
 
-	command_print(CMD, "Default padded value set to 0x%" PRIx8 " for flash bank %u", \
+	command_print(CMD, "Default padded value set to 0x%" PRIx8 " for flash bank %u",
 			p->default_padded_value, p->bank_number);
 
 	return retval;
@@ -1003,6 +1132,14 @@ static const struct command_registration flash_exec_command_handlers[] = {
 
 	},
 	{
+		.name = "filld",
+		.handler = handle_flash_fill_command,
+		.mode = COMMAND_EXEC,
+		.usage = "address value n",
+		.help = "Fill n double-words with 64-bit value, starting at "
+			"word address.  (No autoerase.)",
+	},
+	{
 		.name = "fillw",
 		.handler = handle_flash_fill_command,
 		.mode = COMMAND_EXEC,
@@ -1027,6 +1164,27 @@ static const struct command_registration flash_exec_command_handlers[] = {
 			"word address.  (No autoerase.)",
 	},
 	{
+		.name = "mdb",
+		.handler = handle_flash_md_command,
+		.mode = COMMAND_EXEC,
+		.usage = "address [count]",
+		.help = "Display bytes from flash.",
+	},
+	{
+		.name = "mdh",
+		.handler = handle_flash_md_command,
+		.mode = COMMAND_EXEC,
+		.usage = "address [count]",
+		.help = "Display half-words from flash.",
+	},
+	{
+		.name = "mdw",
+		.handler = handle_flash_md_command,
+		.mode = COMMAND_EXEC,
+		.usage = "address [count]",
+		.help = "Display words from flash.",
+	},
+	{
 		.name = "write_bank",
 		.handler = handle_flash_write_bank_command,
 		.mode = COMMAND_EXEC,
@@ -1040,7 +1198,15 @@ static const struct command_registration flash_exec_command_handlers[] = {
 		.mode = COMMAND_EXEC,
 		.usage = "[erase] [unlock] filename [offset [file_type]]",
 		.help = "Write an image to flash.  Optionally first unprotect "
-			"and/or erase the region to be used.  Allow optional "
+			"and/or erase the region to be used. Allow optional "
+			"offset from beginning of bank (defaults to zero)",
+	},
+	{
+		.name = "verify_image",
+		.handler = handle_flash_verify_image_command,
+		.mode = COMMAND_EXEC,
+		.usage = "filename [offset [file_type]]",
+		.help = "Verify an image against flash. Allow optional "
 			"offset from beginning of bank (defaults to zero)",
 	},
 	{
