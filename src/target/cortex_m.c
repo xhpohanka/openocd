@@ -113,7 +113,7 @@ static int cortexm_dap_write_coreregister_u32(struct target *target,
 		return retval;
 
 	if (target->dbg_msg_enabled) {
-		/* restore DCB_DCRDR - this needs to be in a seperate
+		/* restore DCB_DCRDR - this needs to be in a separate
 		 * transaction otherwise the emulated DCC channel breaks */
 		if (retval == ERROR_OK)
 			retval = mem_ap_write_atomic_u32(armv7m->debug_ap, DCB_DCRDR, dcrdr);
@@ -951,7 +951,7 @@ static int cortex_m_step(struct target *target, int current,
 			 * just step over the instruction with interrupts disabled.
 			 *
 			 * The documentation has no information about this, it was found by observation
-			 * on STM32F1 and STM32F2. Proper explanation welcome. STM32F0 dosen't seem to
+			 * on STM32F1 and STM32F2. Proper explanation welcome. STM32F0 doesn't seem to
 			 * suffer from this problem.
 			 *
 			 * To add some confusion: pc_value has bit 0 always set, while the breakpoint
@@ -1153,10 +1153,10 @@ static int cortex_m_assert_reset(struct target *target)
 
 	if (jtag_reset_config & RESET_HAS_SRST) {
 		/* default to asserting srst */
-		if (!srst_asserted)
+		if (!srst_asserted && !(jtag_reset_config & RESET_SRST_ONCE))
 			adapter_assert_reset();
 
-		/* srst is asserted, ignore AP access errors */
+		/* if srst is asserted, ignore AP access errors */
 		retval = ERROR_OK;
 	} else {
 		/* Use a standard Cortex-M3 software reset mechanism.
