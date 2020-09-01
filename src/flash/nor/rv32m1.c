@@ -204,16 +204,16 @@ static int rv32m1_ftfx_prepare(struct target *target)
 	return result;
 }
 
-static int rv32m1_protect(struct flash_bank *bank, int set, int first, int last)
+static int rv32m1_protect(struct flash_bank *bank, int set, unsigned int first, unsigned int last)
 {
-	int i;
+	unsigned int i;
 
 	if (!bank->prot_blocks || bank->num_prot_blocks == 0) {
 		LOG_ERROR("No protection possible for current bank!");
 		return ERROR_FLASH_BANK_INVALID;
 	}
 
-	for (i = first; i < bank->num_prot_blocks && i <= last; i++)
+	for (i = first; (unsigned) i < bank->num_prot_blocks && i <= last; i++)
 		bank->prot_blocks[i].is_protected = set;
 
 	LOG_INFO("Protection bits will be written at the next FCF sector erase or write.");
@@ -256,7 +256,7 @@ static int rv32m1_protect_check(struct flash_bank *bank)
 	}
 
 	b = kinfo->protection_block;
-	for (i = 0; i < bank->num_prot_blocks; i++) {
+	for (i = 0; (unsigned) i < bank->num_prot_blocks; i++) {
 		if ((fprot >> b) & 1)
 			bank->prot_blocks[i].is_protected = 0;
 		else
@@ -345,9 +345,10 @@ static void rv32m1_invalidate_flash_cache(struct flash_bank *bank)
 	return;
 }
 
-static int rv32m1_erase(struct flash_bank *bank, int first, int last)
+static int rv32m1_erase(struct flash_bank *bank, unsigned int first, unsigned int last)
 {
-	int result, i;
+	int result;
+	unsigned i;
 	struct rv32m1_flash_bank *kinfo = bank->driver_priv;
 
 	result = rv32m1_check_run_mode(bank->target);
@@ -359,7 +360,7 @@ static int rv32m1_erase(struct flash_bank *bank, int first, int last)
 	if (result != ERROR_OK)
 		return result;
 
-	if ((first > bank->num_sectors) || (last > bank->num_sectors))
+	if (((unsigned)first > bank->num_sectors) || ((unsigned)last > bank->num_sectors))
 		return ERROR_FLASH_OPERATION_FAILED;
 
 	/*
@@ -647,7 +648,7 @@ static int rv32m1_blank_check(struct flash_bank *bank)
     if (block_dirty) {
         /* the whole bank is not erased, check sector-by-sector */
         int i;
-        for (i = 0; i < bank->num_sectors; i++) {
+        for (i = 0; (unsigned)i < bank->num_sectors; i++) {
             /* normal margin */
             result = rv32m1_ftfx_command(bank->target, FTFx_CMD_SECTSTAT,
                     kinfo->prog_base + bank->sectors[i].offset,
@@ -663,7 +664,7 @@ static int rv32m1_blank_check(struct flash_bank *bank)
     } else {
         /* the whole bank is erased, update all sectors */
         int i;
-        for (i = 0; i < bank->num_sectors; i++)
+        for (i = 0; (unsigned)i < bank->num_sectors; i++)
             bank->sectors[i].is_erased = 1;
     }
 

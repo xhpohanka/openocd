@@ -480,7 +480,8 @@ COMMAND_HANDLER(stmqspi_handle_mass_erase_command)
 	struct duration bench;
 	uint32_t io_base;
 	uint16_t status;
-	int retval, sector;
+	int retval;
+	unsigned int sector;
 
 	LOG_DEBUG("%s", __func__);
 
@@ -733,7 +734,7 @@ COMMAND_HANDLER(stmqspi_handle_set)
 		return ERROR_FAIL;
 	}
 
-	for (int sector = 0; sector < bank->num_sectors; sector++) {
+	for (unsigned int sector = 0; sector < bank->num_sectors; sector++) {
 		sectors[sector].offset = sector * (stmqspi_info->dev.sectorsize << dual);
 		sectors[sector].size = (stmqspi_info->dev.sectorsize << dual);
 		sectors[sector].is_erased = -1;
@@ -985,12 +986,12 @@ err:
 	return retval;
 }
 
-static int stmqspi_erase(struct flash_bank *bank, int first, int last)
+static int stmqspi_erase(struct flash_bank *bank, unsigned int first, unsigned int last)
 {
 	struct target *target = bank->target;
 	struct stmqspi_flash_bank *stmqspi_info = bank->driver_priv;
 	int retval = ERROR_OK;
-	int sector;
+	unsigned int sector;
 
 	LOG_DEBUG("%s: from sector %d to sector %d", __func__, first, last);
 
@@ -1009,7 +1010,7 @@ static int stmqspi_erase(struct flash_bank *bank, int first, int last)
 		return ERROR_FLASH_OPER_UNSUPPORTED;
 	}
 
-	if ((first < 0) || (last < first) || (last >= bank->num_sectors)) {
+	if ((last < first) || (last >= bank->num_sectors)) {
 		LOG_ERROR("Flash sector invalid");
 		return ERROR_FLASH_SECTOR_INVALID;
 	}
@@ -1039,9 +1040,9 @@ static int stmqspi_erase(struct flash_bank *bank, int first, int last)
 }
 
 static int stmqspi_protect(struct flash_bank *bank, int set,
-	int first, int last)
+	unsigned int first, unsigned int last)
 {
-	int sector;
+	unsigned int sector;
 
 	for (sector = first; sector <= last; sector++)
 		bank->sectors[sector].is_protected = set;
@@ -1065,7 +1066,8 @@ static int stmqspi_blank_check(struct flash_bank *bank)
 	const uint8_t *code;
 	struct sector_info erase_check_info;
 	uint32_t codesize, maxsize, result, exit_point;
-	int num_sectors, sector, index, count, retval;
+	int retval;
+	unsigned int index, count, sector, num_sectors;
 	const uint32_t erased = 0x00FF;
 
 	if (target->state != TARGET_HALTED) {
@@ -1604,7 +1606,8 @@ static int stmqspi_write(struct flash_bank *bank, const uint8_t *buffer,
 	struct target *target = bank->target;
 	struct stmqspi_flash_bank *stmqspi_info = bank->driver_priv;
 	uint32_t io_base = stmqspi_info->io_base;
-	int retval, sector, dual, octal_dtr;
+	int retval, dual, octal_dtr;
+	unsigned int sector;
 
 	LOG_DEBUG("%s: offset=0x%08" PRIx32 " count=0x%08" PRIx32,
 		__func__, offset, count);
@@ -2307,7 +2310,7 @@ static int stmqspi_probe(struct flash_bank *bank)
 		goto err;
 	}
 
-	for (int sector = 0; sector < bank->num_sectors; sector++) {
+	for (unsigned int sector = 0; sector < bank->num_sectors; sector++) {
 		sectors[sector].offset = sector * (stmqspi_info->dev.sectorsize << dual);
 		sectors[sector].size = (stmqspi_info->dev.sectorsize << dual);
 		sectors[sector].is_erased = -1;
