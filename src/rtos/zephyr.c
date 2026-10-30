@@ -69,7 +69,7 @@ struct zephyr_params {
 	const struct rtos_register_stacking *callee_saved_stacking;
 	const struct rtos_register_stacking *cpu_saved_nofp_stacking;
 	const struct rtos_register_stacking *cpu_saved_fp_stacking;
-	int (*get_cpu_state)(struct rtos *rtos, target_addr_t *addr,
+	int (*get_cpu_state)(struct rtos *rtos, target_addr_t thread, target_addr_t *addr,
 			struct zephyr_params *params,
 			struct rtos_reg *callee_saved_reg_list,
 			struct rtos_reg **reg_list, int *num_regs);
@@ -223,7 +223,7 @@ static struct rtos_register_stacking arc_cpu_saved_stacking = {
 };
 
 /* ARCv2 specific implementation */
-static int zephyr_get_arc_state(struct rtos *rtos, target_addr_t *addr,
+static int zephyr_get_arc_state(struct rtos *rtos, target_addr_t thread, target_addr_t *addr,
 			 struct zephyr_params *params,
 			 struct rtos_reg *callee_saved_reg_list,
 			 struct rtos_reg **reg_list, int *num_regs)
@@ -294,7 +294,7 @@ static int zephyr_get_arc_state(struct rtos *rtos, target_addr_t *addr,
 }
 
 /* ARM Cortex-M-specific implementation */
-static int zephyr_get_arm_state(struct rtos *rtos, target_addr_t *addr,
+static int zephyr_get_arm_state(struct rtos *rtos, target_addr_t thread, target_addr_t *addr,
 			 struct zephyr_params *params,
 			 struct rtos_reg *callee_saved_reg_list,
 			 struct rtos_reg **reg_list, int *num_regs)
@@ -314,10 +314,28 @@ static int zephyr_get_arm_state(struct rtos *rtos, target_addr_t *addr,
 	*addr = target_buffer_get_u32(rtos->target,
 			callee_saved_reg_list[0].value);
 
-	if (params->offsets[OFFSET_T_PREEMPT_FLOAT] != UNIMPLEMENTED)
+	stacking = params->cpu_saved_nofp_stacking;
+	if (params->offsets[OFFSET_T_PREEMPT_FLOAT] != UNIMPLEMENTED) {
 		stacking = params->cpu_saved_fp_stacking;
-	else
-		stacking = params->cpu_saved_nofp_stacking;
+
+		/* With FPU sharing the frame stacked on exception entry is an extended one
+		 * (S0-S15, FPSCR) only if the thread has used the FPU, which EXC_RETURN
+		 * bit 4 (clear: extended) of the switched out thread tells. Without the
+		 * offset (older Zephyr) assume extended.
+		 */
+		if (params->offsets[OFFSET_T_ARM_EXC_RETURN] != UNIMPLEMENTED) {
+			uint8_t exc_return;
+
+			retval = target_read_u8(rtos->target, thread +
+					params->offsets[OFFSET_T_ARCH] +
+					params->offsets[OFFSET_T_ARM_EXC_RETURN], &exc_return);
+			if (retval != ERROR_OK)
+				return retval;
+
+			if (exc_return & 0x10)
+				stacking = params->cpu_saved_nofp_stacking;
+		}
+	}
 
 	retval = rtos_generic_stack_read(rtos->target, stacking, *addr, reg_list,
 			num_regs);
@@ -766,7 +784,7 @@ static int zephyr_get_thread_reg_list(struct rtos *rtos, int64_t thread_id,
 	addr = thread_id + params->offsets[OFFSET_T_STACK_POINTER]
 		 - params->callee_saved_stacking->register_offsets[0].offset;
 
-	retval = params->get_cpu_state(rtos, &addr, params, callee_saved_reg_list, reg_list, num_regs);
+	retval = params->get_cpu_state(rtos, thread_id, &addr, params, callee_saved_reg_list, reg_list, num_regs);
 
 	free(callee_saved_reg_list);
 
